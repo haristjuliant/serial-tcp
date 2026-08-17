@@ -398,33 +398,6 @@ dashboard's tests stand an in-memory `SerialPort` implementation in for the
 device instead, which means they — and therefore most of the suite — run on
 Windows too.
 
-## Known issues
-
-**`cargo test` fails on Linux in CI.** macOS and Windows are green; the
-`ubuntu-latest` job fails at the test step with exit code 101. Not yet
-diagnosed — notes so far, so whoever picks this up does not start over:
-
-- The repository had no CI before, and `tests/loopback.rs` and
-  `tests/rfc2217.rs` are `#![cfg(unix)]`. They were written on macOS, so this
-  is very likely the first time they have ever run on Linux. That makes a
-  pre-existing platform assumption more likely than a regression.
-- The failing step is `cargo test`. `cargo fmt --check` and
-  `cargo clippy -- -D warnings` both pass on Linux, and every target builds, so
-  it is test behaviour rather than compilation.
-- First suspicion was that random bytes in `large_transfer_arrives_intact`
-  (0x11/0x13) were being eaten as XON/XOFF by a Linux pty line discipline.
-  **Reading `serialport`'s source weakens that**: `TTYPort::pair()` calls
-  `cfmakeraw` on the slave, and on Linux the slave's termios governs both
-  directions. Worth re-checking rather than assuming, but it is not the obvious
-  answer it first looked like.
-- Next step is simply to read the job log (`gh run view --log-failed`) and find
-  out which test fails, instead of reasoning about it from a distance.
-
-Nothing here affects Windows or macOS, and the release binaries build fine on
-all five targets — the failure is in the test suite, not the tool. That said, it
-is unexplained, so a Linux user should treat this build as untested until it is
-resolved.
-
 ## Not implemented yet
 
 - Nothing is encrypted. `--allow` restricts who may connect, but anyone who can
