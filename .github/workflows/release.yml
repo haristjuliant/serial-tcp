@@ -88,11 +88,15 @@ jobs:
             echo "asset=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
           fi
 
+      # Only a hand-off to the publish job below; the release itself is where
+      # these end up permanently, so there is no reason to keep the copies for
+      # the default ninety days.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}${{ matrix.suffix }}
           path: ${{ steps.package.outputs.asset }}
           if-no-files-found: error
+          retention-days: 1
 
   publish:
     name: Publish the release
