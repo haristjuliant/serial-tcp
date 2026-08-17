@@ -115,14 +115,23 @@ fn bytes_flow_from_client_to_device() {
 fn large_transfer_arrives_intact() {
     const SIZE: usize = 1 << 20; // 1 MiB
 
-    let mut h = start(1);
+    let h = start(1);
     let mut client = connect(h.addr);
 
     let sent = payload(SIZE);
     let to_send = sent.clone();
+
+    // Hand the writer thread its own handle rather than moving the harness in.
+    // Moving it would drop the device end the moment the last byte was written,
+    // and on Linux closing a pseudo-terminal's slave makes the master's next
+    // read fail with EIO, discarding whatever is still sitting in the buffer —
+    // so the client would see the stream end early. macOS drains the buffer
+    // first and only then reports EOF, which is why this only ever failed on
+    // Linux.
+    let mut device = h.device.try_clone().expect("clone the device handle");
     let writer = thread::spawn(move || {
-        h.device.write_all(&to_send).expect("device write");
-        h.device.flush().expect("device flush");
+        device.write_all(&to_send).expect("device write");
+        device.flush().expect("device flush");
     });
 
     let received = read_exact_bytes(&mut client, SIZE);
