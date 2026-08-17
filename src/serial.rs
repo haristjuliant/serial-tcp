@@ -4,6 +4,8 @@
 //! maintainers, so if it ever has to be swapped out this is the only module
 //! that changes.
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use serialport::SerialPort;
 
@@ -68,4 +70,46 @@ pub fn open_pty() -> Result<Pty> {
          Install com0com (https://com0com.com/), create a pair such as COM10<->COM11, then use \
          `--port COM10` here and point your application at COM11."
     )
+}
+
+/// Directory where stable pseudo-terminal links live.
+fn link_dir() -> PathBuf {
+    std::env::temp_dir().join("serial-tcp")
+}
+
+/// Path of the stable link for a given remote address. The OS hands out a
+/// different pty name (`/dev/ttys001`, `/dev/ttys003`, ...) on every
+/// reconnect, which makes it impossible to point a test setup at a fixed
+/// path; this gives the same `--to` address the same local path every time.
+pub fn link_path(to: &str) -> PathBuf {
+    link_dir().join(to.replace('/', "-"))
+}
+
+/// Point `link` at a pty's device path, replacing whatever was there before.
+///
+/// Symlinks into a temporary name first and renames over `link`, so a program
+/// that happens to open the path mid-refresh never sees it briefly missing.
+#[cfg(unix)]
+fn refresh_link(link: &std::path::Path, target: &str) -> Result<()> {
+    let dir = link.parent().expect("link always has a parent");
+    std::fs::create_dir_all(dir).context("failed to create the pseudo-terminal link directory")?;
+
+    let tmp = dir.join(format!(".{}.tmp", std::process::id()));
+    std::os::unix::fs::symlink(target, &tmp)
+        .with_context(|| format!("failed to create a symlink to {target}"))?;
+    std::fs::rename(&tmp, link)
+        .with_context(|| format!("failed to move the symlink into place at {}", link.display()))
+}
+
+/// Create or refresh the stable link for `to` so it points at `pty`.
+#[cfg(unix)]
+pub fn link_pty(pty: &Pty, to: &str) -> Result<PathBuf> {
+    let link = link_path(to);
+    refresh_link(&link, &pty.path)?;
+    Ok(link)
+}
+
+#[cfg(not(unix))]
+pub fn link_pty(_pty: &Pty, _to: &str) -> Result<PathBuf> {
+    anyhow::bail!("pseudo-terminal links are Unix only")
 }

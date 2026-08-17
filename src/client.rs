@@ -33,7 +33,18 @@ pub fn run(args: ConnectArgs) -> Result<()> {
     } else if args.pty {
         let pty = serial::open_pty()?;
         println!("virtual serial port ready at {}", pty.path);
-        println!("point your application at that path");
+        match serial::link_pty(&pty, &args.to) {
+            Ok(link) => {
+                println!("stable path for {}: {}", args.to, link.display());
+                println!(
+                    "point your application at the stable path; it keeps working across reconnects"
+                );
+            }
+            Err(e) => {
+                log::warn!("could not create a stable link: {e:#}");
+                println!("point your application at the path above");
+            }
+        }
         let halves = serial_halves(pty.master.as_ref())?;
         _pty_keepalive = Some(pty);
         (halves, "pty")
