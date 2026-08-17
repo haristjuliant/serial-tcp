@@ -5,12 +5,18 @@ use serialport::{SerialPortInfo, SerialPortType};
 
 use crate::cli::ListArgs;
 
-pub fn run(args: ListArgs) -> Result<()> {
-    let mut ports = serialport::available_ports().context("failed to enumerate serial ports")?;
+/// The ports this machine has, with macOS's duplicate dial-in nodes hidden
+/// unless `all` is set.
+///
+/// Split out from [`run`] so the dashboard can enumerate ports without the
+/// printing.
+pub fn enumerate(all: bool) -> Result<Vec<SerialPortInfo>> {
+    let ports = serialport::available_ports().context("failed to enumerate serial ports")?;
+    Ok(if all { ports } else { prefer_callout(ports) })
+}
 
-    if !args.all {
-        ports = prefer_callout(ports);
-    }
+pub fn run(args: ListArgs) -> Result<()> {
+    let ports = enumerate(args.all)?;
 
     if ports.is_empty() {
         println!("No serial ports found.");
@@ -51,7 +57,7 @@ fn prefer_callout(ports: Vec<SerialPortInfo>) -> Vec<SerialPortInfo> {
         .collect()
 }
 
-fn describe(port_type: &SerialPortType) -> Vec<String> {
+pub(crate) fn describe(port_type: &SerialPortType) -> Vec<String> {
     match port_type {
         SerialPortType::UsbPort(info) => {
             let mut lines = vec![format!("USB {:04x}:{:04x}", info.vid, info.pid)];

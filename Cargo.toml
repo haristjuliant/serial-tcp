@@ -5,10 +5,22 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 env_logger = "0.11.11"
+getrandom = "0.3"
 log = "0.4.33"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 serialport = { version = "4", default-features = false }
+tiny_http = "0.12"
+
+# `strip` and `lto` are what keep the shipped binary small enough to be worth
+# downloading. `panic = "abort"` is deliberately *not* set: a panic in one port's
+# supervisor thread must not take the dashboard down with it.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
 
 [features]
 default = ["udev"]

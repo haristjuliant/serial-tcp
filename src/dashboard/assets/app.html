@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>serial-tcp</title>
+<style>
+  /* Everything is inline: the page has to work with no network at all, since
+     the machine it runs on may have nothing but a serial cable attached. */
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1a1d21; --muted: #6b7280;
+    --line: #e3e6ea; --accent: #2563eb; --ok: #15803d; --warn: #b45309;
+    --bad: #b91c1c; --rx: #1d4ed8; --tx: #b45309; --mono: ui-monospace,
+    SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a; --panel: #1c2024; --ink: #e6e8ea; --muted: #9aa3ad;
+      --line: #2b3138; --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24;
+      --bad: #f87171; --rx: #93c5fd; --tx: #fcd34d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: .75rem; align-items: center;
+    padding: .9rem 1rem; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 1.05rem; margin: 0; font-weight: 650; }
+  header .meta { color: var(--muted); font-size: .82rem; font-family: var(--mono); }
+  header .spacer { flex: 1; }
+  main { padding: 1rem; max-width: 1100px; margin: 0 auto; }
+  h2 { font-size: .95rem; margin: 1.5rem 0 .6rem; }
+  h2:first-child { margin-top: 0; }
+
+  button {
+    font: inherit; padding: .38rem .75rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel);
+    color: var(--ink); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button[disabled] { opacity: .45; cursor: not-allowed; }
+
+  input, select {
+    font: inherit; padding: .35rem .5rem; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+    min-width: 0;
+  }
+  label.field { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; color: var(--muted); }
+  label.check { display: flex; align-items: center; gap: .4rem; font-size: .85rem; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: .85rem 1rem; margin-bottom: .7rem;
+  }
+  .card.selected { border-color: var(--accent); }
+  .card .row1 { display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline; }
+  .card .name { font-weight: 650; font-family: var(--mono); }
+  .card .label { color: var(--muted); }
+  .card .stats {
+    display: flex; flex-wrap: wrap; gap: .35rem 1rem; margin-top: .45rem;
+    font-size: .82rem; color: var(--muted); font-family: var(--mono);
+  }
+  .card .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .7rem; }
+
+  .badge {
+    font-size: .7rem; padding: .1rem .45rem; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+    font-family: var(--mono); text-transform: uppercase; letter-spacing: .03em;
+  }
+  .badge.on { color: var(--ok); border-color: var(--ok); }
+  .badge.off { color: var(--muted); }
+  .badge.lan { color: var(--warn); border-color: var(--warn); }
+  .err { color: var(--bad); font-size: .82rem; margin-top: .4rem; }
+
+  .grid {
+    display: grid; gap: .6rem;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+  .bar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+
+  #log {
+    font-family: var(--mono); font-size: .8rem; line-height: 1.45;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: .6rem; height: 340px; overflow: auto; white-space: pre-wrap;
+    word-break: break-all; margin: .6rem 0;
+  }
+  #log .rx { color: var(--rx); }
+  #log .tx { color: var(--tx); }
+  .hint { color: var(--muted); font-size: .82rem; }
+  .warnbox {
+    border: 1px solid var(--warn); color: var(--warn); border-radius: 8px;
+    padding: .5rem .7rem; font-size: .82rem; margin: .6rem 0;
+  }
+  #toast {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 1.2rem;
+    background: var(--bad); color: #fff; padding: .5rem .9rem; border-radius: 8px;
+    font-size: .85rem; max-width: 90vw; display: none;
+  }
+  @media (max-width: 560px) {
+    main { padding: .7rem; }
+    .card .actions button { flex: 1 1 auto; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>serial-tcp</h1>
+  <span class="meta" id="conn">connecting…</span>
+  <span class="spacer"></span>
+  <button id="add-toggle">Pair a device</button>
+</header>
+
+<main>
+  <section id="add" hidden>
+    <h2>Pair a device</h2>
+    <div class="card">
+      <div class="grid">
+        <label class="field">Device
+          <select id="f-device"></select>
+        </label>
+        <label class="field">Label
+          <input id="f-label" placeholder="GPS module">
+        </label>
+        <label class="field">Protocol
+          <select id="f-protocol">
+            <option value="raw">raw</option>
+            <option value="rfc2217">rfc2217</option>
+          </select>
+        </label>
+        <label class="field">Baud
+          <input id="f-baud" type="number" value="115200" min="1">
+        </label>
+        <label class="field">Data bits
+          <select id="f-data"><option>5</option><option>6</option><option>7</option><option selected>8</option></select>
+        </label>
+        <label class="field">Parity
+          <select id="f-parity"><option>none</option><option>odd</option><option>even</option></select>
+        </label>
+        <label class="field">Stop bits
+          <select id="f-stop"><option selected>1</option><option>2</option></select>
+        </label>
+        <label class="field">Flow control
+          <select id="f-flow"><option>none</option><option>software</option><option>hardware</option></select>
+        </label>
+        <label class="field">TCP port
+          <input id="f-tcp" type="number" placeholder="auto" min="1" max="65535">
+        </label>
+      </div>
+      <div class="bar" style="margin-top:.7rem">
+        <label class="check"><input type="checkbox" id="f-expose"> Reachable from the network</label>
+        <label class="check"><input type="checkbox" id="f-start" checked> Start now</label>
+        <span class="spacer" style="flex:1"></span>
+        <button class="primary" id="f-save">Pair</button>
+      </div>
+      <p class="hint">Leave the TCP port blank to take the next free one. A port
+        that is not reachable from the network only accepts connections from this
+        machine — the same default <code>serve</code> uses.</p>
+    </div>
+  </section>
+
+  <h2>Ports</h2>
+  <div id="ports"></div>
+  <p class="hint" id="empty" hidden>Nothing paired yet. Use “Pair a device” above.</p>
+
+  <section id="detail" hidden>
+    <h2 id="detail-title"></h2>
+    <div class="card">
+      <div class="bar">
+        <button id="t-monitor" class="primary">Monitor</button>
+        <button id="t-settings">Settings</button>
+        <span class="spacer" style="flex:1"></span>
+        <button id="d-close">Close</button>
+      </div>
+
+      <div id="pane-monitor">
+        <div class="bar" style="margin-top:.7rem">
+          <select id="m-view"><option value="ascii">ASCII</option><option value="hex">Hex</option></select>
+          <label class="check"><input type="checkbox" id="m-follow" checked> Follow</label>
+          <button id="m-pause">Pause</button>
+          <button id="m-clear">Clear</button>
+          <span class="hint" id="m-status"></span>
+        </div>
+        <div id="log" aria-live="polite"></div>
+        <div class="bar">
+          <select id="s-enc"><option value="text">Text</option><option value="hex">Hex</option></select>
+          <input id="s-data" placeholder="Bytes to send to the device" style="flex:1">
+          <select id="s-append">
+            <option value="">no line ending</option>
+            <option value="crlf">CR LF</option>
+            <option value="lf">LF</option>
+            <option value="cr">CR</option>
+          </select>
+          <button class="primary" id="s-send">Send</button>
+        </div>
+      </div>
+
+      <div id="pane-settings" hidden>
+        <div class="warnbox">Saving restarts the port. Serial settings are fixed
+          when the device is opened, so any client connected at the time is
+          disconnected.</div>
+        <div class="grid">
+          <label class="field">Label <input id="e-label"></label>
+          <label class="field">Protocol
+            <select id="e-protocol"><option value="raw">raw</option><option value="rfc2217">rfc2217</option></select>
+          </label>
+          <label class="field">Baud <input id="e-baud" type="number" min="1"></label>
+          <label class="field">Data bits
+            <select id="e-data"><option>5</option><option>6</option><option>7</option><option>8</option></select>
+          </label>
+          <label class="field">Parity
+            <select id="e-parity"><option>none</option><option>odd</option><option>even</option></select>
+          </label>
+          <label class="field">Stop bits
+            <select id="e-stop"><option>1</option><option>2</option></select>
+          </label>
+          <label class="field">Flow control
+            <select id="e-flow"><option>none</option><option>software</option><option>hardware</option></select>
+          </label>
+          <label class="field">TCP port <input id="e-tcp" type="number" min="1" max="65535"></label>
+        </div>
+        <div class="bar" style="margin-top:.7rem">
+          <label class="check"><input type="checkbox" id="e-expose"> Reachable from the network</label>
+          <label class="check"><input type="checkbox" id="e-autostart"> Start automatically</label>
+          <span class="spacer" style="flex:1"></span>
+          <button class="danger" id="e-delete">Remove</button>
+          <button class="primary" id="e-save">Save &amp; restart</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let ports = [];
+let selected = null;
+let monitorSource = null;
+let paused = false;
+let asciiTail = "";
+
+// -------------------------------------------------------------- transport
+async function api(path, options = {}) {
+  const opts = Object.assign({ headers: {} }, options);
+  // Required by the server on anything that changes state; a cookie alone is
+  // not enough, and this header cannot be forged from another origin.
+  opts.headers["X-Requested-With"] = "serial-tcp";
+  if (opts.body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(opts.body);
+  }
+  const response = await fetch(path, opts);
+  const text = await response.text();
+  let payload = {};
+  try { payload = text ? JSON.parse(text) : {}; } catch (_) { /* keep {} */ }
+  if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+  return payload;
+}
+
+function toast(message) {
+  const el = $("toast");
+  el.textContent = message;
+  el.style.display = "block";
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { el.style.display = "none"; }, 5000);
+}
+
+const guard = (fn) => (...args) => fn(...args).catch((e) => toast(e.message));
+
+// ------------------------------------------------------------------- list
+function bytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} kB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+function duration(s) {
+  if (s === null || s === undefined) return "—";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function renderPorts() {
+  const host = $("ports");
+  $("empty").hidden = ports.length > 0;
+
+  // Rebuild only when the set of ports changes; otherwise patch in place, so a
+  // once-a-second refresh never steals focus or resets a scroll position.
+  const ids = ports.map((p) => p.id).join(",");
+  if (host.dataset.ids !== ids) {
+    host.dataset.ids = ids;
+    host.innerHTML = "";
+    for (const port of ports) host.appendChild(card(port));
+  }
+  for (const port of ports) patch(port);
+}
+
+function card(port) {
+  const el = document.createElement("div");
+  el.className = "card";
+  el.id = `card-${port.id}`;
+  el.innerHTML = `
+    <div class="row1">
+      <span class="name"></span>
+      <span class="label"></span>
+      <span class="spacer" style="flex:1"></span>
+      <span class="badge state"></span>
+      <span class="badge proto"></span>
+      <span class="badge lan" hidden>network</span>
+    </div>
+    <div class="stats">
+      <span class="tcp"></span><span class="client"></span>
+      <span class="io"></span><span class="up"></span><span class="watch"></span>
+    </div>
+    <div class="err" hidden></div>
+    <div class="actions">
+      <button class="toggle"></button>
+      <button class="open">Monitor &amp; settings</button>
+    </div>`;
+  el.querySelector(".toggle").onclick = guard(async () => {
+    const running = ports.find((p) => p.id === port.id)?.running;
+    await api(`/api/ports/${port.id}/${running ? "stop" : "start"}`, { method: "POST" });
+    await refresh();
+  });
+  el.querySelector(".open").onclick = () => select(port.id);
+  return el;
+}
+
+function patch(port) {
+  const el = $(`card-${port.id}`);
+  if (!el) return;
+  const set = (sel, text) => { el.querySelector(sel).textContent = text; };
+
+  set(".name", port.device);
+  set(".label", port.label || "");
+  set(".tcp", `tcp ${port.tcp_port}`);
+  set(".client", port.client ? `client ${port.client}` : "no client");
+  set(".io", `rx ${bytes(port.rx_bytes)} · tx ${bytes(port.tx_bytes)}`);
+  set(".up", port.running ? `up ${duration(port.uptime_secs)}` : "stopped");
+  set(".watch", port.watchers ? `${port.watchers} watching` : "");
+
+  const state = el.querySelector(".state");
+  state.textContent = port.running ? "running" : "stopped";
+  state.className = `badge state ${port.running ? "on" : "off"}`;
+  set(".proto", port.protocol);
+  el.querySelector(".lan").hidden = !port.expose;
+
+  const err = el.querySelector(".err");
+  err.hidden = !port.last_error;
+  err.textContent = port.last_error || "";
+
+  el.querySelector(".toggle").textContent = port.running ? "Stop" : "Start";
+  el.classList.toggle("selected", selected === port.id);
+}
+
+// ----------------------------------------------------------------- detail
+function select(id) {
+  selected = id;
+  const port = ports.find((p) => p.id === id);
+  if (!port) return;
+
+  $("detail").hidden = false;
+  $("detail-title").textContent = `${port.device}${port.label ? " — " + port.label : ""}`;
+  fillSettings(port);
+  showPane("monitor");
+  openMonitor(id);
+  renderPorts();
+  $("detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeDetail() {
+  selected = null;
+  $("detail").hidden = true;
+  closeMonitor();
+  renderPorts();
+}
+
+function showPane(which) {
+  $("pane-monitor").hidden = which !== "monitor";
+  $("pane-settings").hidden = which !== "settings";
+  $("t-monitor").className = which === "monitor" ? "primary" : "";
+  $("t-settings").className = which === "settings" ? "primary" : "";
+}
+
+function fillSettings(port) {
+  $("e-label").value = port.label || "";
+  $("e-protocol").value = port.protocol;
+  $("e-baud").value = port.baud;
+  $("e-data").value = port.data_bits;
+  $("e-parity").value = port.parity;
+  $("e-stop").value = port.stop_bits;
+  $("e-flow").value = port.flow_control;
+  $("e-tcp").value = port.tcp_port;
+  $("e-expose").checked = port.expose;
+  $("e-autostart").checked = port.autostart;
+}
+
+// ---------------------------------------------------------------- monitor
+function openMonitor(id) {
+  closeMonitor();
+  $("log").textContent = "";
+  asciiTail = "";
+  monitorSource = new EventSource(`/api/ports/${id}/stream`);
+  monitorSource.addEventListener("data", (event) => {
+    if (paused) return;
+    const frame = JSON.parse(event.data);
+    appendFrame(frame);
+    $("m-status").textContent = frame.dropped
+      ? `${frame.dropped} frames dropped — the view is behind, not the link`
+      : "";
+  });
+  monitorSource.onerror = () => { $("m-status").textContent = "stream reconnecting…"; };
+}
+
+function closeMonitor() {
+  if (monitorSource) { monitorSource.close(); monitorSource = null; }
+}
+
+function unhex(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return out;
+}
+
+function appendFrame(frame) {
+  const log = $("log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+
+  if ($("m-view").value === "hex") {
+    add(log, frame.dir, `${frame.dir} ${frame.hex.replace(/(..)/g, "$1 ").trim()}\n`);
+  } else {
+    // Reassemble across frames: a read can split a line anywhere, and showing
+    // half an NMEA sentence per frame would be unreadable.
+    const bytes = unhex(frame.hex);
+    let text = "";
+    for (const b of bytes) {
+      if (b === 10) text += "\n";
+      else if (b === 13) continue;
+      else if (b >= 32 && b < 127) text += String.fromCharCode(b);
+      else text += ".";
+    }
+    asciiTail += text;
+    const lines = asciiTail.split("\n");
+    asciiTail = lines.pop();
+    for (const line of lines) add(log, frame.dir, line + "\n");
+  }
+
+  while (log.childNodes.length > 2000) log.removeChild(log.firstChild);
+  if ($("m-follow").checked && atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function add(log, dir, text) {
+  const span = document.createElement("span");
+  span.className = dir;
+  span.textContent = text;
+  log.appendChild(span);
+}
+
+// ------------------------------------------------------------------ setup
+async function refresh() {
+  const data = await api("/api/ports");
+  ports = data.ports;
+  renderPorts();
+  if (selected && !ports.some((p) => p.id === selected)) closeDetail();
+}
+
+async function loadDevices() {
+  const data = await api("/api/devices");
+  const select = $("f-device");
+  select.innerHTML = "";
+  if (!data.devices.length) {
+    select.appendChild(new Option("no serial ports detected", ""));
+    return;
+  }
+  for (const device of data.devices) {
+    const suffix = device.description.length ? ` — ${device.description[0]}` : "";
+    const option = new Option(
+      `${device.device}${suffix}${device.paired ? " (paired)" : ""}`,
+      device.device
+    );
+    option.disabled = device.paired;
+    select.appendChild(option);
+  }
+  const free = data.devices.find((d) => !d.paired);
+  if (free) select.value = free.device;
+}
+
+function live() {
+  const source = new EventSource("/api/events");
+  source.addEventListener("state", (event) => {
+    $("conn").textContent = "live";
+    ports = JSON.parse(event.data).ports;
+    renderPorts();
+  });
+  source.onerror = () => { $("conn").textContent = "reconnecting…"; };
+}
+
+$("add-toggle").onclick = guard(async () => {
+  const section = $("add");
+  section.hidden = !section.hidden;
+  if (!section.hidden) await loadDevices();
+});
+
+$("f-save").onclick = guard(async () => {
+  const device = $("f-device").value;
+  if (!device) throw new Error("no device selected");
+  const tcp = $("f-tcp").value;
+  await api("/api/ports", {
+    method: "POST",
+    body: {
+      device,
+      label: $("f-label").value,
+      protocol: $("f-protocol").value,
+      baud: Number($("f-baud").value),
+      data_bits: Number($("f-data").value),
+      parity: $("f-parity").value,
+      stop_bits: Number($("f-stop").value),
+      flow_control: $("f-flow").value,
+      tcp_port: tcp ? Number(tcp) : null,
+      expose: $("f-expose").checked,
+      start: $("f-start").checked,
+    },
+  });
+  $("add").hidden = true;
+  $("f-label").value = "";
+  $("f-tcp").value = "";
+  await refresh();
+});
+
+$("e-save").onclick = guard(async () => {
+  if (!selected) return;
+  await api(`/api/ports/${selected}`, {
+    method: "PATCH",
+    body: {
+      label: $("e-label").value,
+      protocol: $("e-protocol").value,
+      baud: Number($("e-baud").value),
+      data_bits: Number($("e-data").value),
+      parity: $("e-parity").value,
+      stop_bits: Number($("e-stop").value),
+      flow_control: $("e-flow").value,
+      tcp_port: Number($("e-tcp").value),
+      expose: $("e-expose").checked,
+      autostart: $("e-autostart").checked,
+    },
+  });
+  await refresh();
+  showPane("monitor");
+  openMonitor(selected);
+});
+
+$("e-delete").onclick = guard(async () => {
+  if (!selected) return;
+  const port = ports.find((p) => p.id === selected);
+  if (!confirm(`Remove ${port ? port.device : selected}?`)) return;
+  await api(`/api/ports/${selected}`, { method: "DELETE" });
+  closeDetail();
+  await refresh();
+});
+
+$("s-send").onclick = guard(async () => {
+  if (!selected) return;
+  const data = $("s-data").value;
+  if (!data) return;
+  await api(`/api/ports/${selected}/send`, {
+    method: "POST",
+    body: { data, encoding: $("s-enc").value, append: $("s-append").value || null },
+  });
+  $("s-data").value = "";
+});
+
+$("s-data").addEventListener("keydown", (e) => { if (e.key === "Enter") $("s-send").click(); });
+$("t-monitor").onclick = () => showPane("monitor");
+$("t-settings").onclick = () => showPane("settings");
+$("d-close").onclick = closeDetail;
+$("m-clear").onclick = () => { $("log").textContent = ""; asciiTail = ""; };
+$("m-pause").onclick = () => {
+  paused = !paused;
+  $("m-pause").textContent = paused ? "Resume" : "Pause";
+};
+$("m-view").onchange = () => { $("log").textContent = ""; asciiTail = ""; };
+
+refresh().catch((e) => toast(e.message));
+live();
+</script>
+</body>
+</html>

@@ -10,8 +10,9 @@ The whole tool is one primitive — pump bytes between two endpoints — wired u
 two ways:
 
 ```
-serve:    Serial port  <──bridge──>  TCP listener
-connect:  TCP socket   <──bridge──>  stdio | pseudo-terminal | local serial port
+serve:      Serial port  <──bridge──>  TCP listener
+connect:    TCP socket   <──bridge──>  stdio | pseudo-terminal | local serial port
+dashboard:  many serves at once, driven from a browser
 ```
 
 `serve` runs on the machine with the physical device. `connect` runs on every
@@ -19,6 +20,23 @@ other machine that wants to use it. That symmetry is why Windows needs no
 special case anywhere in the code: one half of a com0com pair is just a serial
 port like any other, so it goes through the exact same `--port` path as real
 hardware.
+
+`dashboard` is the same thing again, several at a time: a web UI on port 4000
+that supervises ports on 4001, 4002, 4003, … Each one behaves exactly like a
+`serve`, so every client above still works against it unchanged.
+
+## Download
+
+Prebuilt binaries for Windows, macOS and Linux are attached to each
+[release](../../releases). One file, no installer, no runtime — unpack it and
+run it.
+
+macOS builds are unsigned, so Gatekeeper blocks them the first time. Clear the
+quarantine flag once and it will run from then on:
+
+```sh
+xattr -d com.apple.quarantine ./serial-tcp
+```
 
 ## Build
 
@@ -172,6 +190,76 @@ If installing a driver is not acceptable in your environment, the way out is
 to make the client application speak TCP (or RFC 2217, below) directly
 instead of expecting a device node.
 
+## The dashboard
+
+One device and one flag soup is fine. Several devices, or a baud rate you keep
+changing, or a machine you have to walk over to — that is what the dashboard is
+for.
+
+```sh
+serial-tcp dashboard
+# dashboard listening on http://127.0.0.1:4000
+# open  http://127.0.0.1:4000/?token=789dfa82…
+# config  serial-tcp.json
+```
+
+Open the printed URL. The token in it is what gets you in; the page stores it in
+a cookie and you will not need it again on that browser. From there you can
+pair any detected device onto a TCP port, start and stop each one, change line
+settings, watch the bytes arrive, and type bytes back to the device.
+
+Everything is remembered in `serial-tcp.json` next to wherever you ran it
+(`--config` puts it elsewhere). Ports marked *start automatically* come back up
+on their own after a restart.
+
+To reach it from another machine, bind it to the network and open the port in
+your firewall:
+
+```sh
+serial-tcp dashboard --bind 0.0.0.0:4000
+```
+
+### What the token does and does not protect
+
+The token guards **configuration**: pairing devices, changing settings, sending
+bytes from the send box. That is the part where an unauthenticated stranger
+could do real damage.
+
+The data ports — 4001 and up — are ordinary raw or RFC 2217 endpoints, exactly
+as `serve` produces them, and they are **not authenticated**. They cannot be:
+the entire point is that pyserial, ser2net, u-center and this tool's own
+`connect` can reach them, and none of those know anything about our token.
+
+So a paired port only listens on `127.0.0.1` until you tick *reachable from the
+network*, and the dashboard badges the ones that are. If the network in between
+is not trusted, leave them on loopback and tunnel:
+
+```sh
+ssh -L 4001:127.0.0.1:4001 user@the-machine
+```
+
+### Live monitor
+
+The monitor shows traffic whether or not a TCP client is connected — the point
+is usually to see whether a device is saying anything at all. It reads the line
+only while somebody is actually watching, so a port nobody has open still hands
+its first bytes to the next client rather than swallowing them.
+
+A browser that cannot keep up drops frames rather than slowing the wire down,
+and says so. Serial timing matters more than a complete picture in a log pane.
+
+### Changing settings restarts the port
+
+Line settings are fixed when a device is opened and this tool never mutates them
+afterwards, so saving new ones stops and reopens the port. Any client connected
+at that moment is disconnected. The UI says so before you save.
+
+RFC 2217 is the exception, and the reason it exists: a client on an RFC 2217
+port can change baud rate and control lines mid-session, without restarting
+anything. Note that it *will* — a client connecting with its own `--baud` pushes
+that to the device, so the dashboard's setting is the starting point rather than
+the last word.
+
 ## Carrying line settings and control signals
 
 The default `raw` protocol moves bytes and nothing else: `--baud`, `--parity`
@@ -229,7 +317,16 @@ serial-tcp serve (--port <PORT> | --fake) [--bind <ADDR>] [--protocol raw|rfc221
 serial-tcp connect --to <ADDR> (--stdio | --pty | --port <PORT>) [--protocol raw|rfc2217]
                     [--baud <N>] [--data-bits 5|6|7|8] [--parity none|odd|even]
                     [--stop-bits 1|2] [--flow-control none|software|hardware]
+serial-tcp dashboard [--bind <ADDR>] [--token <TOKEN>] [--config <PATH>]
+                      [--base-port <PORT>] [--assets-dir <DIR>]
 ```
+
+`dashboard` defaults to `127.0.0.1:4000`, a config at `./serial-tcp.json`, and
+`4001` as the first port handed out. `--token` (or `SERIAL_TCP_TOKEN`) sets the
+token and saves it; without one, a random token is generated on first run.
+`--base-port` only seeds a new config — after that the file is what counts.
+`--assets-dir` serves the dashboard page from disk instead of the copy compiled
+into the binary, which is only useful when working on the UI itself.
 
 `-v` / `--verbose` (before the subcommand) turns on debug logging — useful for
 seeing how many bytes moved in each direction and why a session ended.
@@ -240,10 +337,12 @@ seeing how many bytes moved in each direction and why a session ended.
   smear the inter-frame gaps that protocols like Modbus RTU depend on.
 - Bytes are forwarded as soon as they arrive rather than batched into full
   buffers, for the same reason.
-- Only one client is bridged at a time. Two writers on one serial line
+- Only one client is bridged at a time, per port. Two writers on one serial line
   interleave into garbage.
 - Data the device sent while no client was connected is discarded when a
   client arrives, rather than delivered as a corrupt partial frame.
+- The dashboard's send box shares one handle with the bridge, so bytes typed
+  there can never land in the middle of a client's frame.
 
 ## Testing
 
@@ -251,12 +350,16 @@ seeing how many bytes moved in each direction and why a session ended.
 cargo test
 ```
 
-18 tests, none of which need real hardware — pseudo-terminals stand in for
-the physical device, the same trick `--fake` uses.
+None of it needs real hardware. The `serve`/`connect` tests use
+pseudo-terminals, the same trick `--fake` uses, so they are Unix-only. The
+dashboard's tests stand an in-memory `SerialPort` implementation in for the
+device instead, which means they — and therefore most of the suite — run on
+Windows too.
 
 ## Not implemented yet
 
-- No authentication or encryption (see the warning above).
+- The data ports carry no authentication or encryption (see the warning above).
+  The dashboard's own token covers configuration only.
 - UART line status (parity/framing/overrun errors, break detection) is not
   reported to RFC 2217 clients; `SET-LINESTATE-MASK` is accepted but nothing
   is ever notified.

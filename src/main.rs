@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use serial_tcp::cli::{Cli, Command};
-use serial_tcp::{client, list, server};
+use serial_tcp::{client, dashboard, list, server};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -16,5 +16,6 @@ fn main() -> Result<()> {
         Command::List(args) => list::run(args),
         Command::Serve(args) => server::run(args),
         Command::Connect(args) => client::run(args),
+        Command::Dashboard(args) => dashboard::run(args),
     }
 }

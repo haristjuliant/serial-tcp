@@ -102,15 +102,30 @@ pub fn serve_on(
     Ok(())
 }
 
-fn session(port: &dyn SerialPort, stream: TcpStream, options: &Options) -> Result<Stats> {
+/// Bridge one already-accepted client.
+///
+/// Public so the dashboard's supervisor can run its own cancellable accept loop
+/// while still going through exactly this path for the bridging itself — raw and
+/// RFC 2217 alike.
+pub fn session(port: &dyn SerialPort, stream: TcpStream, options: &Options) -> Result<Stats> {
+    session_with(port, serial_halves(port)?, stream, options)
+}
+
+/// [`session`], but with the serial halves supplied by the caller.
+///
+/// The dashboard passes halves it has wrapped, so every byte can be counted and
+/// mirrored to a browser without `bridge` or the pumps knowing anything about
+/// it. `port` is still needed for the extra handles RFC 2217 clones off for its
+/// control and modem-polling paths.
+pub fn session_with(
+    port: &dyn SerialPort,
+    serial: Halves,
+    stream: TcpStream,
+    options: &Options,
+) -> Result<Stats> {
     match options.protocol {
-        ProtocolArg::Raw => Ok(bridge(
-            serial_halves(port)?,
-            tcp_halves(stream)?,
-            "serial",
-            "tcp",
-        )?),
-        ProtocolArg::Rfc2217 => rfc2217_session(port, stream, options),
+        ProtocolArg::Raw => Ok(bridge(serial, tcp_halves(stream)?, "serial", "tcp")?),
+        ProtocolArg::Rfc2217 => rfc2217_session(port, serial, stream, options),
     }
 }
 
@@ -118,7 +133,12 @@ fn session(port: &dyn SerialPort, stream: TcpStream, options: &Options) -> Resul
 ///
 /// The Telnet framing is confined to the two adapters wrapped around the socket
 /// here, so the bridge underneath still sees nothing but a reader and a writer.
-fn rfc2217_session(port: &dyn SerialPort, stream: TcpStream, options: &Options) -> Result<Stats> {
+fn rfc2217_session(
+    port: &dyn SerialPort,
+    serial: Halves,
+    stream: TcpStream,
+    options: &Options,
+) -> Result<Stats> {
     stream
         .set_nodelay(true)
         .context("failed to set TCP_NODELAY")?;
@@ -156,7 +176,7 @@ fn rfc2217_session(port: &dyn SerialPort, stream: TcpStream, options: &Options) 
         Box::new(EscapingWriter::new(socket)) as Box<dyn Write + Send>,
     );
 
-    let stats = bridge(serial_halves(port)?, tcp, "serial", "tcp");
+    let stats = bridge(serial, tcp, "serial", "tcp");
 
     stop_notifier.store(true, Ordering::Relaxed);
     let _ = notifier.join();

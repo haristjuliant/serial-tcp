@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -25,6 +28,34 @@ pub enum Command {
 
     /// Connect to a remote `serve` and expose it locally.
     Connect(ConnectArgs),
+
+    /// Run the web dashboard and supervise any number of serial ports.
+    Dashboard(DashboardArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct DashboardArgs {
+    /// Address the dashboard listens on. Loopback by default: putting a
+    /// control panel for your hardware on the network should be deliberate.
+    #[arg(long, default_value = "127.0.0.1:4000", value_name = "ADDR")]
+    pub bind: String,
+
+    /// Access token. One is generated and saved on first run if omitted.
+    #[arg(long, env = "SERIAL_TCP_TOKEN")]
+    pub token: Option<String>,
+
+    /// Where the dashboard reads and writes its configuration.
+    #[arg(long, default_value = "serial-tcp.json", value_name = "PATH")]
+    pub config: PathBuf,
+
+    /// First TCP port handed to a paired serial port; the rest count upwards.
+    #[arg(long, default_value_t = 4001, value_name = "PORT")]
+    pub base_port: u16,
+
+    /// Serve the dashboard page from this directory instead of the copy baked
+    /// into the binary — for working on the UI without recompiling.
+    #[arg(long, value_name = "DIR")]
+    pub assets_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -36,7 +67,13 @@ pub struct ListArgs {
 }
 
 /// Serial line settings, shared by `serve` and `connect --port`.
-#[derive(Args, Debug, Clone)]
+///
+/// Also the shape the dashboard stores and exchanges as JSON, which is why the
+/// serde derives sit alongside clap's — the two read separate attributes and do
+/// not interfere. `#[serde(default)]` lets a config file name only the fields it
+/// cares about.
+#[derive(Args, Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SerialArgs {
     /// Baud rate.
     #[arg(short, long, default_value_t = 115_200)]
@@ -135,7 +172,8 @@ pub struct ConnectArgs {
     pub serial: SerialArgs,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProtocolArg {
     /// A plain byte pipe. Nothing but data crosses the link.
     Raw,
@@ -144,7 +182,7 @@ pub enum ProtocolArg {
     Rfc2217,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataBitsArg {
     #[value(name = "5")]
     Five,
@@ -156,14 +194,15 @@ pub enum DataBitsArg {
     Eight,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ParityArg {
     None,
     Odd,
     Even,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopBitsArg {
     #[value(name = "1")]
     One,
@@ -171,11 +210,85 @@ pub enum StopBitsArg {
     Two,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FlowControlArg {
     None,
     Software,
     Hardware,
+}
+
+// Data bits and stop bits are counts, so they belong in JSON as the numbers 8
+// and 1 rather than as "Eight" and "One". Deriving would give the latter, hence
+// the hand-written impls; they also reject nonsense values at parse time with a
+// message that names what was expected.
+
+impl DataBitsArg {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::Five => 5,
+            Self::Six => 6,
+            Self::Seven => 7,
+            Self::Eight => 8,
+        }
+    }
+
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            5 => Some(Self::Five),
+            6 => Some(Self::Six),
+            7 => Some(Self::Seven),
+            8 => Some(Self::Eight),
+            _ => None,
+        }
+    }
+}
+
+impl StopBitsArg {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+        }
+    }
+
+    pub fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::One),
+            2 => Some(Self::Two),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for DataBitsArg {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u8(self.as_u8())
+    }
+}
+
+impl<'de> Deserialize<'de> for DataBitsArg {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = u8::deserialize(d)?;
+        Self::from_u8(value).ok_or_else(|| {
+            serde::de::Error::custom(format!("invalid data bits {value}, expected 5, 6, 7 or 8"))
+        })
+    }
+}
+
+impl Serialize for StopBitsArg {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u8(self.as_u8())
+    }
+}
+
+impl<'de> Deserialize<'de> for StopBitsArg {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = u8::deserialize(d)?;
+        Self::from_u8(value).ok_or_else(|| {
+            serde::de::Error::custom(format!("invalid stop bits {value}, expected 1 or 2"))
+        })
+    }
 }
 
 impl From<DataBitsArg> for serialport::DataBits {
