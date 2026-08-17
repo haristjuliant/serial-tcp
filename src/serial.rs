@@ -97,8 +97,12 @@ fn refresh_link(link: &std::path::Path, target: &str) -> Result<()> {
     let tmp = dir.join(format!(".{}.tmp", std::process::id()));
     std::os::unix::fs::symlink(target, &tmp)
         .with_context(|| format!("failed to create a symlink to {target}"))?;
-    std::fs::rename(&tmp, link)
-        .with_context(|| format!("failed to move the symlink into place at {}", link.display()))
+    std::fs::rename(&tmp, link).with_context(|| {
+        format!(
+            "failed to move the symlink into place at {}",
+            link.display()
+        )
+    })
 }
 
 /// Create or refresh the stable link for `to` so it points at `pty`.
