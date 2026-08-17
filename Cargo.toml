@@ -2,6 +2,12 @@
 name = "serial-tcp"
 version = "0.1.0"
 edition = "2024"
+description = "Share a serial port over TCP, with a web dashboard for many at once. macOS, Windows and Linux."
+license = "MIT"
+repository = "https://github.com/haristjuliant/serial-tcp"
+readme = "README.md"
+keywords = ["serial", "tcp", "rfc2217", "rs232", "modbus"]
+categories = ["command-line-utilities", "hardware-support", "network-programming"]
 
 [dependencies]
 anyhow = "1.0.104"
