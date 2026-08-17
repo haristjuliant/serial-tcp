@@ -1,0 +1,20 @@
+[package]
+name = "serial-tcp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11.11"
+log = "0.4.33"
+serialport = { version = "4", default-features = false }
+
+[features]
+default = ["udev"]
+
+# Port enumeration on Linux goes through libudev, which is a C library that has
+# to be present at link time. Building without this feature drops that
+# dependency — needed for a statically linked musl binary — at the cost of
+# `list` returning nothing on Linux. No effect on macOS or Windows.
+udev = ["serialport/libudev"]
