@@ -28,12 +28,21 @@ jobs:
             os: macos-latest
             archive: tar.gz
 
+          # `macos-13` retired in December 2025 and its jobs now queue forever
+          # waiting for a runner that will never arrive; `macos-15-intel` is the
+          # replacement label for building x86_64 on real Intel hardware.
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             archive: tar.gz
 
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            archive: tar.gz
+
+          # Native arm64 rather than a cross-compile, which also keeps libudev
+          # available so `list` works. For Raspberry Pi and similar.
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
             archive: tar.gz
 
           # Statically linked, so it runs on any glibc vintage. Drops libudev,
@@ -135,7 +144,12 @@ jobs:
             | macOS (Apple Silicon) | `…aarch64-apple-darwin.tar.gz` |
             | macOS (Intel) | `…x86_64-apple-darwin.tar.gz` |
             | Linux (x64) | `…x86_64-unknown-linux-gnu.tar.gz` |
+            | Linux (ARM64) | `…aarch64-unknown-linux-gnu.tar.gz` |
             | Linux (x64, static) | `…x86_64-unknown-linux-musl-static.tar.gz` |
+
+            The ARM64 build is the one for a Raspberry Pi or similar board. The
+            static x64 build needs no system libraries, at the cost of `list`
+            finding no ports.
 
             The macOS builds are not signed, so Gatekeeper will refuse them the
             first time. Clear the quarantine flag once:
