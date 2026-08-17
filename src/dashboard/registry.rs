@@ -19,6 +19,7 @@ use serialport::SerialPort;
 
 use crate::cli::{ProtocolArg, SerialArgs};
 use crate::dashboard::config::{Config, PortConfig, slug};
+use crate::dashboard::net::Allowlist;
 use crate::dashboard::supervisor::{self, Control};
 use crate::dashboard::tap::{Tap, TapSink};
 use crate::serial;
@@ -38,6 +39,8 @@ pub struct Registry {
     config_path: PathBuf,
     base_port: u16,
     token: String,
+    require_token: bool,
+    allow: Arc<Allowlist>,
     opener: DeviceOpener,
 }
 
@@ -54,12 +57,22 @@ impl Registry {
             config_path,
             base_port: config.base_port,
             token: config.token.clone(),
+            require_token: config.require_token,
+            allow: Arc::new(config.allowlist()),
             opener,
         })
     }
 
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    pub fn require_token(&self) -> bool {
+        self.require_token
+    }
+
+    pub fn allowlist(&self) -> &Arc<Allowlist> {
+        &self.allow
     }
 
     pub fn config_path(&self) -> &PathBuf {
@@ -197,7 +210,7 @@ impl Registry {
         }
 
         let cfg = entry.config();
-        let result = supervisor::start(&entry, &cfg, &self.opener);
+        let result = supervisor::start(&entry, &cfg, &self.opener, Arc::clone(&self.allow));
 
         match result {
             Ok(control) => {
@@ -246,6 +259,8 @@ impl Registry {
         let config = Config {
             version: crate::dashboard::config::CURRENT_VERSION,
             token: self.token.clone(),
+            require_token: self.require_token,
+            allow: self.allow.rules().to_vec(),
             base_port: self.base_port,
             ports,
         };

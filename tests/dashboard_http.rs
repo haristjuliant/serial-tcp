@@ -16,8 +16,9 @@ use std::time::Duration;
 use common::{TempDir, fake_pair};
 use serialport::SerialPort as _;
 
-use serial_tcp::dashboard::config::Config;
+use serial_tcp::dashboard::config::{Config, Overrides};
 use serial_tcp::dashboard::http::{self, Assets};
+use serial_tcp::dashboard::net::Allowlist;
 use serial_tcp::dashboard::registry::{DeviceOpener, Registry};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -29,6 +30,10 @@ struct Dashboard {
 }
 
 fn start() -> Dashboard {
+    start_with(|_| {})
+}
+
+fn start_with(configure: impl FnOnce(&mut Config)) -> Dashboard {
     let dir = TempDir::new("http");
     let (template, _device) = fake_pair();
     // Leak the device end: nothing in these tests reads it, but the line has to
@@ -37,7 +42,8 @@ fn start() -> Dashboard {
 
     let opener: DeviceOpener = Arc::new(move |_path, _settings| Ok(template.try_clone()?));
 
-    let config = Config::new(4001, TOKEN.to_owned());
+    let mut config = Config::new(4001, TOKEN.to_owned());
+    configure(&mut config);
     let registry = Registry::new(&config, dir.join("serial-tcp.json"), opener);
 
     let server = http::bind("127.0.0.1:0").expect("bind an ephemeral port");
@@ -370,7 +376,7 @@ fn settings_can_be_changed_and_are_persisted() {
     assert_eq!(patched.json()["port"]["autostart"], true);
 
     // What is on disk is what would come back after a restart.
-    let saved = Config::load_or_create(d.registry.config_path(), 4001, None).unwrap();
+    let saved = Config::load_or_create(d.registry.config_path(), &Overrides::none(4001)).unwrap();
     let port = saved.port("fake0").expect("saved");
     assert_eq!(port.serial.baud, 115_200);
     assert!(port.autostart);
@@ -557,4 +563,77 @@ fn the_data_stream_is_closed_without_a_token() {
     let d = start();
     let reply = send(d.addr, "GET", "/api/ports/fake0/stream", &[], "");
     assert_eq!(reply.status, 401);
+}
+
+// ------------------------------------------------------------- access options
+
+#[test]
+fn with_the_token_turned_off_the_dashboard_is_open() {
+    let d = start_with(|c| c.require_token = false);
+
+    let page = send(d.addr, "GET", "/", &[], "");
+    assert_eq!(page.status, 200);
+    assert!(page.body.contains("<title>serial-tcp</title>"));
+
+    let api = send(d.addr, "GET", "/api/ports", &[], "");
+    assert_eq!(api.status, 200);
+}
+
+/// Turning the token off must not also turn the CSRF check off: a page on
+/// another site could otherwise drive the dashboard through the browser.
+#[test]
+fn the_csrf_check_survives_turning_the_token_off() {
+    let d = start_with(|c| c.require_token = false);
+
+    let reply = send(d.addr, "POST", "/api/ports", &[], r#"{"device":"FAKE0"}"#);
+    assert_eq!(reply.status, 403);
+
+    let ok = send(
+        d.addr,
+        "POST",
+        "/api/ports",
+        &[("X-Requested-With", "serial-tcp")],
+        r#"{"device":"FAKE0","tcp_port":0}"#,
+    );
+    assert_eq!(ok.status, 200, "{}", ok.body);
+}
+
+#[test]
+fn the_page_reports_how_open_it_is() {
+    let guarded = start();
+    let access = &send(guarded.addr, "GET", "/api/ports", &authed(), "").json()["access"];
+    assert_eq!(access["require_token"], true);
+    assert_eq!(access["summary"], "anywhere");
+
+    let restricted = start_with(|c| {
+        c.require_token = false;
+        c.allow = Allowlist::parse(&["192.168.8.0/22".to_owned()])
+            .unwrap()
+            .rules()
+            .to_vec();
+    });
+    let access = &send(restricted.addr, "GET", "/api/ports", &[], "").json()["access"];
+    assert_eq!(access["require_token"], false);
+    assert_eq!(access["summary"], "192.168.8.0/22");
+    assert_eq!(access["allow"][0], "192.168.8.0/22");
+}
+
+/// The allowlist logic is covered exhaustively by the unit tests in
+/// `dashboard::net`; what a socket test can add is the guarantee that a rule
+/// naming some *other* network never locks the machine out of its own
+/// dashboard.
+#[test]
+fn an_allowlist_never_shuts_out_loopback() {
+    let d = start_with(|c| {
+        c.allow = Allowlist::parse(&["10.0.0.0/8".to_owned()])
+            .unwrap()
+            .rules()
+            .to_vec();
+    });
+
+    let reply = send(d.addr, "GET", "/api/ports", &authed(), "");
+    assert_eq!(
+        reply.status, 200,
+        "127.0.0.1 is outside 10/8 but must still get in"
+    );
 }

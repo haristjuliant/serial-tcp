@@ -5,7 +5,10 @@ mod common;
 use common::TempDir;
 
 use serial_tcp::cli::{DataBitsArg, ParityArg, ProtocolArg, SerialArgs, StopBitsArg};
-use serial_tcp::dashboard::config::{CURRENT_VERSION, Config, PortConfig, generate_token, slug};
+use serial_tcp::dashboard::config::{
+    CURRENT_VERSION, Config, Overrides, PortConfig, generate_token, slug,
+};
+use serial_tcp::dashboard::net::Allowlist;
 
 fn sample_port() -> PortConfig {
     PortConfig {
@@ -35,7 +38,7 @@ fn a_saved_config_comes_back_unchanged() {
     original.ports.push(sample_port());
     original.save(&path).unwrap();
 
-    let loaded = Config::load_or_create(&path, 4001, None).unwrap();
+    let loaded = Config::load_or_create(&path, &Overrides::none(4001)).unwrap();
 
     assert_eq!(loaded.token, original.token);
     assert_eq!(loaded.base_port, 4001);
@@ -74,7 +77,7 @@ fn a_missing_config_is_created_with_a_fresh_token() {
     let dir = TempDir::new("config-new");
     let path = dir.join("serial-tcp.json");
 
-    let config = Config::load_or_create(&path, 4100, None).unwrap();
+    let config = Config::load_or_create(&path, &Overrides::none(4100)).unwrap();
 
     assert_eq!(config.version, CURRENT_VERSION);
     assert_eq!(config.base_port, 4100);
@@ -96,7 +99,7 @@ fn a_corrupt_config_is_moved_aside_rather_than_fatal() {
     let path = dir.join("serial-tcp.json");
     std::fs::write(&path, "{ this is not json").unwrap();
 
-    let config = Config::load_or_create(&path, 4001, None).unwrap();
+    let config = Config::load_or_create(&path, &Overrides::none(4001)).unwrap();
     assert!(config.ports.is_empty());
     assert!(!config.token.is_empty());
 
@@ -118,7 +121,7 @@ fn a_config_from_a_newer_version_is_not_guessed_at() {
     )
     .unwrap();
 
-    let config = Config::load_or_create(&path, 4001, None).unwrap();
+    let config = Config::load_or_create(&path, &Overrides::none(4001)).unwrap();
     assert_eq!(config.version, CURRENT_VERSION);
     assert_ne!(config.token, "abc", "a fresh config means a fresh token");
     assert!(dir.join("serial-tcp.json.bak").exists());
@@ -131,8 +134,78 @@ fn an_explicit_token_wins_over_the_stored_one() {
 
     Config::new(4001, "stored".to_owned()).save(&path).unwrap();
 
-    let config = Config::load_or_create(&path, 4001, Some("chosen".to_owned())).unwrap();
+    let overrides = Overrides {
+        token: Some("chosen".to_owned()),
+        ..Overrides::none(4001)
+    };
+    let config = Config::load_or_create(&path, &overrides).unwrap();
     assert_eq!(config.token, "chosen");
+}
+
+#[test]
+fn the_token_requirement_can_be_turned_off_and_is_remembered() {
+    let dir = TempDir::new("config-notoken");
+    let path = dir.join("serial-tcp.json");
+
+    let overrides = Overrides {
+        no_token: true,
+        ..Overrides::none(4001)
+    };
+    let config = Config::load_or_create(&path, &overrides).unwrap();
+    assert!(!config.require_token);
+    // A token is still kept on file, so turning the gate back on needs no new
+    // one handed out.
+    assert_eq!(config.token.len(), 64);
+    config.save(&path).unwrap();
+
+    let reloaded = Config::load_or_create(&path, &Overrides::none(4001)).unwrap();
+    assert!(
+        !reloaded.require_token,
+        "the choice should survive a restart"
+    );
+    assert_eq!(reloaded.token, config.token);
+}
+
+/// Configs written before the option existed must keep asking for a token.
+#[test]
+fn an_older_config_without_the_field_still_requires_a_token() {
+    let dir = TempDir::new("config-legacy");
+    let path = dir.join("serial-tcp.json");
+    std::fs::write(
+        &path,
+        r#"{"version":1,"token":"abc","base_port":4001,"ports":[]}"#,
+    )
+    .unwrap();
+
+    let config = Config::load_or_create(&path, &Overrides::none(4001)).unwrap();
+    assert!(config.require_token);
+    assert!(config.allow.is_empty());
+    assert_eq!(config.token, "abc");
+}
+
+#[test]
+fn an_allowlist_round_trips_as_readable_text() {
+    let dir = TempDir::new("config-allow");
+    let path = dir.join("serial-tcp.json");
+
+    let overrides = Overrides {
+        allow: Some(Allowlist::parse(&["192.168.8.0/22".to_owned()]).unwrap()),
+        ..Overrides::none(4001)
+    };
+    let config = Config::load_or_create(&path, &overrides).unwrap();
+    config.save(&path).unwrap();
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\"192.168.8.0/22\""), "got: {text}");
+
+    let reloaded = Config::load_or_create(&path, &Overrides::none(4001)).unwrap();
+    assert_eq!(reloaded.allow.len(), 1);
+    assert!(
+        reloaded
+            .allowlist()
+            .permits("192.168.9.104".parse().unwrap())
+    );
+    assert!(!reloaded.allowlist().permits("10.0.0.1".parse().unwrap()));
 }
 
 /// A partially written file would lose every paired port, so saving must be

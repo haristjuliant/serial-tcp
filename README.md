@@ -212,6 +212,9 @@ Everything is remembered in `serial-tcp.json` next to wherever you ran it
 (`--config` puts it elsewhere). Ports marked *start automatically* come back up
 on their own after a restart.
 
+The baud field offers the usual rates from 300 up to 1000000, and still accepts
+anything you type that is not on the list.
+
 To reach it from another machine, bind it to the network and open the port in
 your firewall:
 
@@ -219,24 +222,60 @@ your firewall:
 serial-tcp dashboard --bind 0.0.0.0:4000
 ```
 
-### What the token does and does not protect
+Startup prints the address other machines should use, so there is no need to go
+hunting through `ipconfig` for it.
 
-The token guards **configuration**: pairing devices, changing settings, sending
-bytes from the send box. That is the part where an unauthenticated stranger
-could do real damage.
+### Who can get in
 
-The data ports — 4001 and up — are ordinary raw or RFC 2217 endpoints, exactly
-as `serve` produces them, and they are **not authenticated**. They cannot be:
-the entire point is that pyserial, ser2net, u-center and this tool's own
-`connect` can reach them, and none of those know anything about our token.
+There are two independent gates, and they cover different things.
 
-So a paired port only listens on `127.0.0.1` until you tick *reachable from the
-network*, and the dashboard badges the ones that are. If the network in between
-is not trusted, leave them on loopback and tunnel:
+**The token** guards configuration: pairing devices, changing settings, sending
+bytes from the send box. It is on by default. `--no-token` turns it off, which
+is reasonable on a network you control and a bad idea on one you do not:
+
+```sh
+serial-tcp dashboard --no-token
+```
+
+**The allowlist** guards by address, and it is the only control the data ports
+can have at all. Ports 4001 and up are ordinary raw or RFC 2217 endpoints, and
+they cannot be asked for a password without breaking every client that needs to
+reach them — pyserial, ser2net, u-center and this tool's own `connect` know
+nothing about our token. Where a connection *comes from* is all that is left to
+judge it by:
+
+```sh
+serial-tcp dashboard --bind 0.0.0.0:4000 --allow 192.168.8.0/22
+```
+
+That applies to the dashboard **and** to every serial port it serves. Repeat
+`--allow` for more than one range; a bare address like `--allow 192.168.9.50` is
+a range of one. Loopback is always allowed, so a rule naming some other network
+can never lock you out of your own machine.
+
+The two combine the way you would want. Token only, on a trusted LAN. Allowlist
+only, when the clients are scripts that cannot hold a token. Both, when the
+dashboard is reachable somewhere you would rather it were not. Neither, and the
+tool says so at startup and badges it in the UI:
+
+```
+access  NO TOKEN, from anywhere
+
+WARNING: this dashboard is on the network with no token and no address restriction.
+         Anyone who can reach it can reconfigure every device attached to it.
+         Consider --allow 192.168.9.0/24
+```
+
+Whatever the settings, a paired port still listens on `127.0.0.1` until you tick
+*reachable from the network*. If the network in between is not trusted, leave it
+that way and tunnel instead:
 
 ```sh
 ssh -L 4001:127.0.0.1:4001 user@the-machine
 ```
+
+None of this is encryption. An allowlist stops the wrong hosts connecting; it
+does nothing about anyone reading the traffic in between.
 
 ### Live monitor
 
@@ -317,13 +356,16 @@ serial-tcp serve (--port <PORT> | --fake) [--bind <ADDR>] [--protocol raw|rfc221
 serial-tcp connect --to <ADDR> (--stdio | --pty | --port <PORT>) [--protocol raw|rfc2217]
                     [--baud <N>] [--data-bits 5|6|7|8] [--parity none|odd|even]
                     [--stop-bits 1|2] [--flow-control none|software|hardware]
-serial-tcp dashboard [--bind <ADDR>] [--token <TOKEN>] [--config <PATH>]
+serial-tcp dashboard [--bind <ADDR>] [--token <TOKEN> | --no-token]
+                      [--allow <CIDR>]... [--config <PATH>]
                       [--base-port <PORT>] [--assets-dir <DIR>]
 ```
 
 `dashboard` defaults to `127.0.0.1:4000`, a config at `./serial-tcp.json`, and
 `4001` as the first port handed out. `--token` (or `SERIAL_TCP_TOKEN`) sets the
 token and saves it; without one, a random token is generated on first run.
+`--no-token` and `--allow` are described under [Who can get in](#who-can-get-in)
+and are both remembered in the config, so later runs need not repeat them.
 `--base-port` only seeds a new config — after that the file is what counts.
 `--assets-dir` serves the dashboard page from disk instead of the copy compiled
 into the binary, which is only useful when working on the UI itself.
@@ -358,8 +400,10 @@ Windows too.
 
 ## Not implemented yet
 
-- The data ports carry no authentication or encryption (see the warning above).
-  The dashboard's own token covers configuration only.
+- Nothing is encrypted. `--allow` restricts who may connect, but anyone who can
+  read the traffic in between still can. Tunnel over SSH where that matters.
+- The data ports carry no authentication of their own — by necessity, since the
+  clients that need them cannot hold a token. `--allow` is the control they have.
 - UART line status (parity/framing/overrun errors, break detection) is not
   reported to RFC 2217 clients; `SET-LINESTATE-MASK` is accepted but nothing
   is ever notified.

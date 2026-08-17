@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{ProtocolArg, SerialArgs};
+use crate::dashboard::net::{Allowlist, Cidr};
 
 /// Bumped only when the shape changes incompatibly. A file from the future is
 /// treated the same as a corrupt one.
@@ -26,9 +27,41 @@ const TOKEN_BYTES: usize = 32;
 pub struct Config {
     pub version: u32,
     pub token: String,
+    /// When false the dashboard is open to anyone who can reach it. Defaults on,
+    /// and stays on for configs written before the option existed.
+    #[serde(default = "yes")]
+    pub require_token: bool,
+    /// Which addresses may connect — to the dashboard and to every serial port
+    /// it serves. Empty means anywhere.
+    #[serde(default)]
+    pub allow: Vec<Cidr>,
     pub base_port: u16,
     #[serde(default)]
     pub ports: Vec<PortConfig>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// What the command line said, overriding whatever is on disk.
+pub struct Overrides {
+    pub base_port: u16,
+    pub token: Option<String>,
+    pub no_token: bool,
+    pub allow: Option<Allowlist>,
+}
+
+impl Overrides {
+    /// Nothing overridden — the config file decides everything.
+    pub fn none(base_port: u16) -> Self {
+        Self {
+            base_port,
+            token: None,
+            no_token: false,
+            allow: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,20 +96,23 @@ impl Config {
         Self {
             version: CURRENT_VERSION,
             token,
+            require_token: true,
+            allow: Vec::new(),
             base_port,
             ports: Vec::new(),
         }
+    }
+
+    pub fn allowlist(&self) -> Allowlist {
+        Allowlist::new(self.allow.clone())
     }
 
     /// Read the config, or start a fresh one if there is nothing usable there.
     ///
     /// `token_override` wins over whatever is on disk and is not written back,
     /// so `--token` / `SERIAL_TCP_TOKEN` can be used without rewriting the file.
-    pub fn load_or_create(
-        path: &Path,
-        base_port: u16,
-        token_override: Option<String>,
-    ) -> Result<Self> {
+    pub fn load_or_create(path: &Path, overrides: &Overrides) -> Result<Self> {
+        let base_port = overrides.base_port;
         let mut config = match fs::read_to_string(path) {
             Ok(text) => match serde_json::from_str::<Self>(&text) {
                 Ok(config) if config.version <= CURRENT_VERSION => config,
@@ -110,9 +146,18 @@ impl Config {
             }
         };
 
-        if let Some(token) = token_override {
+        if let Some(token) = overrides.token.clone() {
             config.token = token;
         }
+        if overrides.no_token {
+            config.require_token = false;
+        }
+        if let Some(allow) = &overrides.allow {
+            config.allow = allow.rules().to_vec();
+        }
+
+        // Keep a usable token on file even while it is not being asked for, so
+        // turning the requirement back on does not need a new one handed out.
         if config.token.is_empty() {
             config.token = generate_token()?;
         }

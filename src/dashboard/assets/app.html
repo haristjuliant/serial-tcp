@@ -110,9 +110,40 @@
 </style>
 </head>
 <body>
+<!-- Offered as suggestions rather than a fixed list: these are the rates
+     people actually use, but an odd one is still typeable. -->
+<datalist id="bauds">
+  <option value="300"></option>
+  <option value="600"></option>
+  <option value="1200"></option>
+  <option value="2400"></option>
+  <option value="4800"></option>
+  <option value="9600"></option>
+  <option value="14400"></option>
+  <option value="19200"></option>
+  <option value="28800"></option>
+  <option value="38400"></option>
+  <option value="57600"></option>
+  <option value="76800"></option>
+  <option value="115200"></option>
+  <option value="128000"></option>
+  <option value="153600"></option>
+  <option value="230400"></option>
+  <option value="250000"></option>
+  <option value="256000"></option>
+  <option value="460800"></option>
+  <option value="500000"></option>
+  <option value="576000"></option>
+  <option value="614400"></option>
+  <option value="750000"></option>
+  <option value="921600"></option>
+  <option value="1000000"></option>
+</datalist>
+
 <header>
   <h1>serial-tcp</h1>
   <span class="meta" id="conn">connecting…</span>
+  <span class="badge" id="access" hidden></span>
   <span class="spacer"></span>
   <button id="add-toggle">Pair a device</button>
 </header>
@@ -135,7 +166,7 @@
           </select>
         </label>
         <label class="field">Baud
-          <input id="f-baud" type="number" value="115200" min="1">
+          <input id="f-baud" type="number" value="115200" min="1" list="bauds">
         </label>
         <label class="field">Data bits
           <select id="f-data"><option>5</option><option>6</option><option>7</option><option selected>8</option></select>
@@ -210,7 +241,7 @@
           <label class="field">Protocol
             <select id="e-protocol"><option value="raw">raw</option><option value="rfc2217">rfc2217</option></select>
           </label>
-          <label class="field">Baud <input id="e-baud" type="number" min="1"></label>
+          <label class="field">Baud <input id="e-baud" type="number" min="1" list="bauds"></label>
           <label class="field">Data bits
             <select id="e-data"><option>5</option><option>6</option><option>7</option><option>8</option></select>
           </label>
@@ -467,9 +498,25 @@ function add(log, dir, text) {
 }
 
 // ------------------------------------------------------------------ setup
+function renderAccess(access) {
+  if (!access) return;
+  const el = $("access");
+  el.hidden = false;
+  const open = !access.require_token && access.summary === "anywhere";
+  el.textContent = access.require_token
+    ? `token · ${access.summary}`
+    : `no token · ${access.summary}`;
+  // An unguarded dashboard should not look like a guarded one.
+  el.className = `badge ${open ? "lan" : "on"}`;
+  el.title = open
+    ? "No token and no address restriction: anyone who can reach this page controls every device on it."
+    : "";
+}
+
 async function refresh() {
   const data = await api("/api/ports");
   ports = data.ports;
+  renderAccess(data.access);
   renderPorts();
   if (selected && !ports.some((p) => p.id === selected)) closeDetail();
 }
@@ -499,7 +546,9 @@ function live() {
   const source = new EventSource("/api/events");
   source.addEventListener("state", (event) => {
     $("conn").textContent = "live";
-    ports = JSON.parse(event.data).ports;
+    const data = JSON.parse(event.data);
+    ports = data.ports;
+    renderAccess(data.access);
     renderPorts();
   });
   source.onerror = () => { $("conn").textContent = "reconnecting…"; };

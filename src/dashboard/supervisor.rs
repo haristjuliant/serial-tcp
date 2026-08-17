@@ -18,6 +18,7 @@ use anyhow::{Context, Result};
 use serialport::{ClearBuffer, SerialPort};
 
 use crate::dashboard::config::PortConfig;
+use crate::dashboard::net::Allowlist;
 use crate::dashboard::registry::{DeviceOpener, PortEntry, bind_listener};
 use crate::dashboard::tap::{Dir, TapReader, TapSink};
 use crate::endpoint::{Halves, IO_TIMEOUT};
@@ -67,7 +68,12 @@ impl Control {
 }
 
 /// Open the device, bind its listener, and start supervising.
-pub fn start(entry: &Arc<PortEntry>, cfg: &PortConfig, opener: &DeviceOpener) -> Result<Control> {
+pub fn start(
+    entry: &Arc<PortEntry>,
+    cfg: &PortConfig,
+    opener: &DeviceOpener,
+    allow: Arc<Allowlist>,
+) -> Result<Control> {
     let port = opener(&cfg.device, &cfg.serial)
         .with_context(|| format!("failed to open {}", cfg.device))?;
 
@@ -101,11 +107,15 @@ pub fn start(entry: &Arc<PortEntry>, cfg: &PortConfig, opener: &DeviceOpener) ->
         cfg.device.as_str()
     );
     if !bound.ip().is_loopback() {
-        log::warn!(
-            "{bound} is reachable from the network and the connection is unauthenticated \
-             and unencrypted — anyone who can reach this port controls {}",
-            cfg.device
-        );
+        if allow.is_empty() {
+            log::warn!(
+                "{bound} is reachable from the network and the connection is unauthenticated \
+                 and unencrypted — anyone who can reach this port controls {}",
+                cfg.device
+            );
+        } else {
+            log::info!("{bound} accepts connections from {} only", allow.describe());
+        }
     }
 
     let handle = thread::Builder::new()
@@ -115,7 +125,15 @@ pub fn start(entry: &Arc<PortEntry>, cfg: &PortConfig, opener: &DeviceOpener) ->
             let stop = Arc::clone(&stop);
             let active = Arc::clone(&active);
             let inject = Arc::clone(&inject);
-            move || supervise(entry, port, listener, inject, options, stop, active)
+            let duties = Duties {
+                entry,
+                inject,
+                options,
+                stop,
+                active,
+                allow,
+            };
+            move || supervise(port, listener, duties)
         })
         .context("failed to spawn the port supervisor")?;
 
@@ -128,15 +146,26 @@ pub fn start(entry: &Arc<PortEntry>, cfg: &PortConfig, opener: &DeviceOpener) ->
     })
 }
 
-fn supervise(
+/// Everything the supervisor thread carries for the life of one running port.
+struct Duties {
     entry: Arc<PortEntry>,
-    port: Box<dyn SerialPort>,
-    listener: TcpListener,
     inject: SharedWriter,
     options: Options,
     stop: Arc<AtomicBool>,
     active: Arc<Mutex<Option<TcpStream>>>,
-) {
+    allow: Arc<Allowlist>,
+}
+
+fn supervise(port: Box<dyn SerialPort>, listener: TcpListener, duties: Duties) {
+    let Duties {
+        entry,
+        inject,
+        options,
+        stop,
+        active,
+        allow,
+    } = duties;
+
     // Used only between sessions, to feed the browser's monitor while no TCP
     // client is attached. Safe precisely because it is only ever read from in
     // the branch below: while a session is running, this loop is parked inside
@@ -159,6 +188,19 @@ fn supervise(
                 continue;
             }
         };
+
+        // These ports speak raw bytes or RFC 2217 and have no way to ask who is
+        // calling, so where the connection came from is the only thing there is
+        // to go on. Refuse before the device is touched at all.
+        if !allow.permits(peer.ip()) {
+            log::warn!(
+                "{}: refused {peer}, which is outside {}",
+                entry.id,
+                allow.describe()
+            );
+            let _ = stream.shutdown(Shutdown::Both);
+            continue;
+        }
 
         // A socket accepted from a non-blocking listener can inherit that mode,
         // which would turn every pump read into a busy spin. `tcp_halves` sets

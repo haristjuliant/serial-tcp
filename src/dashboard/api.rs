@@ -178,7 +178,18 @@ pub fn devices(registry: &Registry) -> ApiResult {
 
 pub fn ports(registry: &Registry) -> ApiResult {
     let ports: Vec<PortDto> = registry.entries().iter().map(port_dto).collect();
-    Ok(json!({ "ports": ports }))
+    let allow = registry.allowlist();
+
+    Ok(json!({
+        "ports": ports,
+        // Sent with every state update so the page can say out loud how open it
+        // is — an unguarded dashboard should not look like a guarded one.
+        "access": {
+            "require_token": registry.require_token(),
+            "allow": allow.rules().iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "summary": allow.describe(),
+        },
+    }))
 }
 
 pub fn create(registry: &Registry, body: &str) -> ApiResult {

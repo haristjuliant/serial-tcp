@@ -117,10 +117,30 @@ fn handle(ctx: &Arc<Ctx>, mut request: Request) {
     let method = request.method().clone();
     let peer = request.remote_addr().map(|a| a.ip());
 
-    // The one unauthenticated route: arriving with the token in the URL is how
-    // you get the cookie in the first place. EventSource cannot set headers, so
-    // a cookie is the only thing the live streams can carry.
-    if path == "/"
+    // Where a request came from is settled before anything else, including the
+    // token: an address that is not allowed should not get as far as learning
+    // whether its guess was right.
+    if let Some(ip) = peer
+        && !ctx.registry.allowlist().permits(ip)
+    {
+        log::warn!(
+            "refused a dashboard request from {ip}, which is outside {}",
+            ctx.registry.allowlist().describe()
+        );
+        return respond_error(
+            request,
+            403,
+            "this address is not allowed to reach the dashboard",
+        );
+    }
+
+    let require_token = ctx.registry.require_token();
+
+    // The one route reachable without the cookie: arriving with the token in the
+    // URL is how you get the cookie in the first place. EventSource cannot set
+    // headers, so a cookie is the only thing the live streams can carry.
+    if require_token
+        && path == "/"
         && method == Method::Get
         && let Some(token) = query_param(&query, "token")
     {
@@ -131,7 +151,7 @@ fn handle(ctx: &Arc<Ctx>, mut request: Request) {
         return reject(ctx, request, peer);
     }
 
-    if !authorized(&request, ctx.registry.token()) {
+    if require_token && !authorized(&request, ctx.registry.token()) {
         return reject(ctx, request, peer);
     }
 

@@ -44,6 +44,18 @@ pub struct DashboardArgs {
     #[arg(long, env = "SERIAL_TCP_TOKEN")]
     pub token: Option<String>,
 
+    /// Do not ask for a token. Anyone who can reach the dashboard can then
+    /// reconfigure every device on it, so pair this with --allow.
+    #[arg(long, conflicts_with = "token")]
+    pub no_token: bool,
+
+    /// Only accept connections from this address or network, e.g.
+    /// 192.168.8.0/22. Repeat for more than one. Applies to the dashboard *and*
+    /// to every serial port it serves — which is the only access control those
+    /// ports can have. Loopback is always allowed.
+    #[arg(long, value_name = "CIDR")]
+    pub allow: Vec<String>,
+
     /// Where the dashboard reads and writes its configuration.
     #[arg(long, default_value = "serial-tcp.json", value_name = "PATH")]
     pub config: PathBuf,
