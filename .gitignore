@@ -13,3 +13,7 @@
 # from a checkout would otherwise leave a secret sitting in the working tree.
 /serial-tcp.json
 /serial-tcp.json.bak
+
+# Default debug-level log file (see --log-file), written by running the tool
+# from a checkout.
+/serial-tcp.log

@@ -10,9 +10,24 @@ use serde::{Deserialize, Serialize};
     about = "Bridge a serial port over TCP. Works on macOS, Windows and Linux."
 )]
 pub struct Cli {
-    /// Enable debug logging.
+    /// Enable debug logging on the console.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// Full debug-level log file, written alongside the console output
+    /// regardless of --verbose. Relative paths resolve against the current
+    /// working directory.
+    #[arg(
+        long,
+        global = true,
+        default_value = "serial-tcp.log",
+        value_name = "PATH"
+    )]
+    pub log_file: PathBuf,
+
+    /// Disable file logging; only the console gets log output.
+    #[arg(long, global = true)]
+    pub no_log_file: bool,
 
     #[command(subcommand)]
     pub command: Command,

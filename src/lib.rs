@@ -16,6 +16,7 @@ pub mod client;
 pub mod dashboard;
 pub mod endpoint;
 pub mod list;
+pub mod logging;
 pub mod rfc2217;
 pub mod serial;
 pub mod server;

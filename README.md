@@ -404,8 +404,15 @@ and are both remembered in the config, so later runs need not repeat them.
 `--assets-dir` serves the dashboard page from disk instead of the copy compiled
 into the binary, which is only useful when working on the UI itself.
 
-`-v` / `--verbose` (before the subcommand) turns on debug logging — useful for
-seeing how many bytes moved in each direction and why a session ended.
+`-v` / `--verbose` (before the subcommand) turns on debug logging on the
+console — useful for seeing how many bytes moved in each direction and why a
+session ended.
+
+Regardless of `--verbose`, every run also writes the full debug-level trace to
+a log file — `./serial-tcp.log` by default, `--log-file <PATH>` to change
+where, `--no-log-file` to turn it off. That way a session that looked clean on
+screen can still be diagnosed after the fact, without having to reproduce it
+with `--verbose` in hand.
 
 ## Notes on behaviour
 
