@@ -43,11 +43,21 @@ Details: [The dashboard](#the-dashboard), [Who can get in](#who-can-get-in),
 The whole tool is one primitive — pump bytes between two endpoints — wired up
 two ways:
 
+```mermaid
+flowchart LR
+    subgraph serve["serve"]
+        direction LR
+        SP["Serial port"] <--> B1(("bridge")) <--> TL["TCP listener"]
+    end
+
+    subgraph connect["connect"]
+        direction LR
+        TS["TCP socket"] <--> B2(("bridge")) <--> LOCAL["stdio / pseudo-terminal /
+local serial port"]
+    end
 ```
-serve:      Serial port  <──bridge──>  TCP listener
-connect:    TCP socket   <──bridge──>  stdio | pseudo-terminal | local serial port
-dashboard:  many serves at once, driven from a browser
-```
+
+`dashboard` runs many `serve`s at once, driven from a browser.
 
 `serve` runs on the machine with the physical device. `connect` runs on every
 other machine that wants to use it. That symmetry is why Windows needs no
