@@ -4,6 +4,40 @@ Share a serial port over TCP. One tool, same commands, on macOS, Windows and
 Linux — so a physical device plugged into one machine can be read from
 another.
 
+## TL;DR
+
+**On the machine with the hardware:**
+
+```sh
+serial-tcp dashboard --bind 0.0.0.0:4000
+```
+
+Copy the token printed in the console and open it from another device, e.g.
+`http://<server-ip>:4000/?token=...`. Or skip the token and restrict by
+network instead:
+
+```sh
+serial-tcp dashboard --bind 0.0.0.0:4000 --no-token --allow 192.168.1.0/22
+```
+
+In the dashboard, pair each detected device onto a port (4001, 4002, …) —
+that's what decides which UART is reachable on which port.
+
+**On every other machine:**
+
+```sh
+serial-tcp connect --to <server-ip>:4001 --pty --protocol rfc2217 --baud 460800
+```
+
+- `--pty` exposes a virtual serial port other software can open directly; use
+  `--stdio` instead to see the raw bytes in the terminal.
+- `--protocol rfc2217` lets the client change the server's baud rate (and
+  other line settings) mid-session; use `raw` for a plain byte pipe that
+  leaves the server's settings alone.
+
+Details: [The dashboard](#the-dashboard), [Who can get in](#who-can-get-in),
+[Carrying line settings and control signals](#carrying-line-settings-and-control-signals).
+
 ## How it works
 
 The whole tool is one primitive — pump bytes between two endpoints — wired up
