@@ -38,6 +38,12 @@ serial-tcp connect --to <server-ip>:4001 --pty --protocol rfc2217 --baud 460800
 Details: [The dashboard](#the-dashboard), [Who can get in](#who-can-get-in),
 [Carrying line settings and control signals](#carrying-line-settings-and-control-signals).
 
+<img src="docs/images/dashboard-ports.png" alt="Dashboard with no ports paired yet" width="600">
+
+<img src="docs/images/dashboard-pair.png" alt="Pairing a device onto a TCP port" width="600">
+
+<img src="docs/images/dashboard-monitor.png" alt="Watching bytes arrive in the live monitor" width="600">
+
 ## How it works
 
 The whole tool is one primitive — pump bytes between two endpoints — wired up
